@@ -26,8 +26,8 @@ $buku_stok_sedikit_result = mysqli_query($koneksi, $buku_stok_sedikit_query);
 ?>
 
 <div class="mb-8">
-    <h2 class="text-3xl font-bold text-gray-800">Dashboard Ringkasan 📊</h2>
-    <p class="text-gray-600">Selamat datang kembali, Kael! Ini ringkasan sistem perpustakaanmu.</p>
+    <h2 class="text-3xl font-bold text-gray-800">Dashboard Ringkasan</h2>
+    <p class="text-gray-600">Selamat datang kembali, Ini ringkasan sistem perpustakaanmu.</p>
 </div>
 
 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">

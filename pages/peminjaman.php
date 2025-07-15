@@ -38,6 +38,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['process_return'])) {
     $return_date = $_POST['return_date'];
     $borrow_date = $_POST['borrow_date'];
 
+    $current_search = isset($_POST['current_search']) ? '&search=' . urlencode($_POST['current_search']) : '';
+    $current_page = isset($_POST['current_page']) ? '&p=' . $_POST['current_page'] : '';
+    $redirect_url = "index.php?page=peminjaman" . $current_page . $current_search;
+
     $tarif_denda_per_hari = 1000;
     $batas_hari_pinjam = 7;
     $date1 = date_create($borrow_date);
@@ -72,9 +76,14 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['process_return'])) {
         $_SESSION['message'] = 'Gagal memproses pengembalian: ' . $e->getMessage();
         $_SESSION['message_type'] = 'error';
     }
-    header("Location: index.php?page=peminjaman");
+    header("Location: " . $redirect_url);
     exit();
 }
+
+$search_keyword = isset($_GET['search']) ? mysqli_real_escape_string($koneksi, $_GET['search']) : '';
+$page_num = isset($_GET['p']) ? (int)$_GET['p'] : 1;
+$limit = 100;
+$offset = ($page_num - 1) * $limit;
 
 $is_return_form = false;
 if (isset($_GET['action']) && $_GET['action'] == 'return' && isset($_GET['id'])) {
@@ -89,7 +98,25 @@ if (isset($_GET['action']) && $_GET['action'] == 'return' && isset($_GET['id']))
     $return_data = mysqli_fetch_assoc($return_q);
 }
 
-$search_keyword = isset($_GET['search']) ? mysqli_real_escape_string($koneksi, $_GET['search']) : '';
+$count_query_base = "FROM borrowings br
+                     JOIN members m ON br.member_id = m.id
+                     JOIN borrowing_details bd ON br.id = bd.borrowing_id
+                     JOIN books b ON bd.book_id = b.id
+                     LEFT JOIN returns r ON br.id = r.borrowing_id";
+
+$where_clause = "";
+if (!empty($search_keyword)) {
+    $where_clause = " WHERE m.full_name LIKE '$search_keyword%' OR b.title LIKE '$search_keyword%'";
+}
+
+$total_rows_query = mysqli_query($koneksi, "SELECT COUNT(br.id) as total " . $count_query_base . $where_clause);
+$total_rows = mysqli_fetch_assoc($total_rows_query)['total'];
+$total_pages = ceil($total_rows / $limit);
+
+$data_query = "SELECT br.id, m.full_name, b.title as book_title, br.borrow_date, r.return_date, r.late_fee "
+              . $count_query_base . $where_clause . 
+              " ORDER BY r.return_date IS NULL DESC, br.id DESC LIMIT $limit OFFSET $offset";
+$result = mysqli_query($koneksi, $data_query);
 
 ?>
 
@@ -100,68 +127,57 @@ $search_keyword = isset($_GET['search']) ? mysqli_real_escape_string($koneksi, $
         <input type="hidden" name="process_return" value="1">
         <input type="hidden" name="borrowing_id" value="<?php echo $return_data['id']; ?>">
         <input type="hidden" id="borrow_date_hidden" name="borrow_date" value="<?php echo $return_data['borrow_date']; ?>">
-
+        <input type="hidden" name="current_search" value="<?php echo htmlspecialchars($search_keyword); ?>">
+        <input type="hidden" name="current_page" value="<?php echo $page_num; ?>">
         <div class="mb-4">
             <p class="text-sm text-gray-600">Nama Peminjam: <span class="font-semibold text-gray-900"><?php echo htmlspecialchars($return_data['full_name']); ?></span></p>
             <p class="text-sm text-gray-600">Buku: <span class="font-semibold text-gray-900">"<?php echo htmlspecialchars($return_data['book_title']); ?>"</span></p>
             <p class="text-sm text-gray-600">Tgl Pinjam: <span class="font-semibold text-gray-900"><?php echo date('d M Y', strtotime($return_data['borrow_date'])); ?></span></p>
         </div>
-        
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6 items-end">
             <div>
                 <label for="return_date_input" class="block text-sm font-medium text-gray-700">Tanggal Kembali</label>
-                <input type="date" id="return_date_input" name="return_date" value="<?php echo date('Y-m-d'); ?>" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-purple-500 focus:border-purple-500" required>
+                <input type="date" id="return_date_input" name="return_date" value="<?php echo date('Y-m-d'); ?>" class="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm" required>
             </div>
             <div>
                 <p class="text-sm font-medium text-gray-700">Perkiraan Denda</p>
                 <p id="perkiraan_denda" class="mt-1 text-2xl font-bold text-red-600">Rp 0</p>
             </div>
         </div>
-        
         <div class="mt-6 flex items-center space-x-4">
             <button type="submit" class="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-purple-600 hover:bg-purple-700">
                 Proses Pengembalian
             </button>
-            <a href="index.php?page=peminjaman" class="inline-flex justify-center py-2 px-4 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+            <a href="?page=peminjaman&p=<?php echo $page_num; ?>&search=<?php echo htmlspecialchars($search_keyword); ?>" class="inline-flex justify-center py-2 px-4 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
                 Batal
             </a>
         </div>
     </form>
-
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             const returnDateInput = document.getElementById('return_date_input');
-            const borrowDateValue = document.getElementById('borrow_date_hidden').value;
-            const dendaDisplay = document.getElementById('perkiraan_denda');
-
-            function calculateFee() {
-                const borrowDate = new Date(borrowDateValue);
-                const returnDate = new Date(returnDateInput.value);
-
-                if (isNaN(borrowDate.getTime()) || isNaN(returnDate.getTime())) {
-                    dendaDisplay.textContent = 'Rp 0';
-                    return;
+            if(returnDateInput) {
+                const borrowDateValue = document.getElementById('borrow_date_hidden').value;
+                const dendaDisplay = document.getElementById('perkiraan_denda');
+                function calculateFee() {
+                    const borrowDate = new Date(borrowDateValue);
+                    const returnDate = new Date(returnDateInput.value);
+                    if (isNaN(borrowDate.getTime()) || isNaN(returnDate.getTime())) { dendaDisplay.textContent = 'Rp 0'; return; }
+                    const timeDiff = returnDate.getTime() - borrowDate.getTime();
+                    const dayDiff = Math.ceil(timeDiff / (1000 * 3600 * 24));
+                    const tarifHarian = 1000;
+                    const batasPinjam = 7;
+                    const hariTelat = Math.max(0, dayDiff - batasPinjam);
+                    const totalDenda = hariTelat * tarifHarian;
+                    dendaDisplay.textContent = 'Rp ' + totalDenda.toLocaleString('id-ID');
                 }
-
-                const timeDiff = returnDate.getTime() - borrowDate.getTime();
-                const dayDiff = Math.ceil(timeDiff / (1000 * 3600 * 24));
-
-                const tarifHarian = 1000;
-                const batasPinjam = 7;
-                
-                const hariTelat = Math.max(0, dayDiff - batasPinjam);
-                const totalDenda = hariTelat * tarifHarian;
-                
-                dendaDisplay.textContent = 'Rp ' + totalDenda.toLocaleString('id-ID');
+                returnDateInput.addEventListener('input', calculateFee);
+                calculateFee();
             }
-            
-            returnDateInput.addEventListener('input', calculateFee);
-            calculateFee();
         });
     </script>
 </div>
 <?php endif; ?>
-
 
 <div class="bg-white p-8 rounded-lg shadow-md mb-8">
     <h2 class="text-2xl font-bold text-gray-800 mb-6">Catat Peminjaman Baru</h2>
@@ -205,18 +221,15 @@ $search_keyword = isset($_GET['search']) ? mysqli_real_escape_string($koneksi, $
     </form>
 </div>
 
-
 <div class="bg-white p-8 rounded-lg shadow-md">
     <div class="flex flex-col md:flex-row justify-between items-center mb-6">
         <h2 class="text-2xl font-bold text-gray-800">Daftar Riwayat Peminjaman</h2>
         <form action="index.php" method="GET" class="mt-4 md:mt-0">
             <input type="hidden" name="page" value="peminjaman">
             <div class="relative">
-                <input type="text" name="search" placeholder="Cari nama peminjam atau judul buku..." value="<?php echo htmlspecialchars($search_keyword); ?>" class="block w-full md:w-80 px-4 py-2 pr-10 text-sm text-gray-900 border border-gray-300 rounded-md focus:ring-purple-500 focus:border-purple-500">
+                <input type="text" name="search" placeholder="Cari nama atau judul buku..." value="<?php echo htmlspecialchars($search_keyword); ?>" class="block w-full md:w-80 px-4 py-2 pr-10 text-sm text-gray-900 border border-gray-300 rounded-md">
                 <button type="submit" class="absolute inset-y-0 right-0 flex items-center pr-3">
-                    <svg class="h-5 w-5 text-gray-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-                        <path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd" />
-                    </svg>
+                    <i data-lucide="search" class="w-5 h-5 text-gray-400"></i>
                 </button>
             </div>
         </form>
@@ -237,24 +250,8 @@ $search_keyword = isset($_GET['search']) ? mysqli_real_escape_string($koneksi, $
             </thead>
             <tbody class="bg-white divide-y divide-gray-200">
                 <?php
-                $query = "SELECT br.id, m.full_name, b.title as book_title, br.borrow_date, 
-                                 r.return_date, r.late_fee
-                          FROM borrowings br
-                          JOIN members m ON br.member_id = m.id
-                          JOIN borrowing_details bd ON br.id = bd.borrowing_id
-                          JOIN books b ON bd.book_id = b.id
-                          LEFT JOIN returns r ON br.id = r.borrowing_id";
-
-                if (!empty($search_keyword)) {
-                    $query .= " WHERE m.full_name LIKE '$search_keyword%' OR b.title LIKE '$search_keyword%'";
-                }
-
-                $query .= " ORDER BY r.return_date IS NULL DESC, br.id DESC";
-                
-                $result = mysqli_query($koneksi, $query);
-
                 if (mysqli_num_rows($result) > 0) :
-                    $nomor = 1;
+                    $nomor = $offset + 1;
                     while ($row = mysqli_fetch_assoc($result)) :
                         $sudah_kembali = !is_null($row['return_date']);
                 ?>
@@ -266,7 +263,7 @@ $search_keyword = isset($_GET['search']) ? mysqli_real_escape_string($koneksi, $
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                                 <?php echo $sudah_kembali ? date('d M Y', strtotime($row['return_date'])) : '-'; ?>
                             </td>
-                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium <?php echo $row['late_fee'] > 0 ? 'text-red-600' : 'text-gray-900'; ?>">
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium <?php echo ($sudah_kembali && $row['late_fee'] > 0) ? 'text-red-600' : 'text-gray-900'; ?>">
                                 <?php echo $sudah_kembali ? 'Rp ' . number_format($row['late_fee'], 0, ',', '.') : '-'; ?>
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium">
@@ -275,7 +272,7 @@ $search_keyword = isset($_GET['search']) ? mysqli_real_escape_string($koneksi, $
                                         Selesai
                                     </span>
                                 <?php else : ?>
-                                    <a href="index.php?page=peminjaman&action=return&id=<?php echo $row['id']; ?>" class="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md shadow-sm text-white bg-purple-600 hover:bg-purple-700">
+                                    <a href="?page=peminjaman&action=return&id=<?php echo $row['id']; ?>&p=<?php echo $page_num; ?>&search=<?php echo htmlspecialchars($search_keyword); ?>" class="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md shadow-sm text-white bg-purple-600 hover:bg-purple-700">
                                         Kembalikan Buku
                                     </a>
                                 <?php endif; ?>
@@ -290,4 +287,46 @@ $search_keyword = isset($_GET['search']) ? mysqli_real_escape_string($koneksi, $
             </tbody>
         </table>
     </div>
+
+    <?php if ($total_pages > 1) : ?>
+    <div class="mt-6 flex justify-between items-center">
+        <p class="text-sm text-gray-700">
+            Halaman <span class="font-medium"><?php echo $page_num; ?></span> dari <span class="font-medium"><?php echo $total_pages; ?></span>
+        </p>
+        <nav class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
+            <a href="?page=peminjaman&p=<?php echo max(1, $page_num - 1); ?>&search=<?php echo $search_keyword; ?>" class="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 <?php echo ($page_num <= 1) ? 'opacity-50 cursor-not-allowed' : ''; ?>">
+                <i data-lucide="chevron-left" class="w-5 h-5"></i>
+            </a>
+            
+            <?php 
+            $start_page = max(1, $page_num - 2);
+            $end_page = min($total_pages, $page_num + 2);
+
+            if ($start_page > 1) {
+                echo '<a href="?page=peminjaman&p=1&search='.$search_keyword.'" class="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium bg-white text-gray-700 hover:bg-gray-50">1</a>';
+                if ($start_page > 2) {
+                    echo '<span class="relative inline-flex items-center px-4 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-700">...</span>';
+                }
+            }
+            
+            for ($i = $start_page; $i <= $end_page; $i++) : ?>
+                <a href="?page=peminjaman&p=<?php echo $i; ?>&search=<?php echo $search_keyword; ?>" class="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium <?php echo ($i == $page_num) ? 'z-10 bg-purple-50 border-purple-500 text-purple-600' : 'bg-white text-gray-700 hover:bg-gray-50'; ?>">
+                    <?php echo $i; ?>
+                </a>
+            <?php endfor; 
+            
+            if ($end_page < $total_pages) {
+                if ($end_page < $total_pages - 1) {
+                    echo '<span class="relative inline-flex items-center px-4 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-700">...</span>';
+                }
+                echo '<a href="?page=peminjaman&p='.$total_pages.'&search='.$search_keyword.'" class="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium bg-white text-gray-700 hover:bg-gray-50">'.$total_pages.'</a>';
+            }
+            ?>
+
+            <a href="?page=peminjaman&p=<?php echo min($total_pages, $page_num + 1); ?>&search=<?php echo $search_keyword; ?>" class="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 <?php echo ($page_num >= $total_pages) ? 'opacity-50 cursor-not-allowed' : ''; ?>">
+                <i data-lucide="chevron-right" class="w-5 h-5"></i>
+            </a>
+        </nav>
+    </div>
+    <?php endif; ?>
 </div>
